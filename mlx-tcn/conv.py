@@ -50,6 +50,18 @@ class TemporalConv1d(nn.Conv1d):
         self.pad_len = (kernel_size - 1) * dilation
         self.causal = causal
 
+        if buffer is not None:
+            if isinstance(buffer, mx.array):
+                expected_shape = (1, self.pad_len, in_channels)
+                if buffer.shape != expected_shape:
+                    raise ValueError(
+                        f"buffer must have shape {expected_shape}, but got {buffer.shape}."
+                    )
+            elif not isinstance(buffer, (int, float)):
+                raise TypeError("buffer must be an mx.array, int, or float when provided.")
+            else:
+                buffer = float(buffer)
+
         self.padder = TemporalPad1d(padding=self.pad_len, 
                                     in_channels=in_channels,
                                     buffer=buffer, 
@@ -68,20 +80,19 @@ class TemporalConv1d(nn.Conv1d):
       
         	
       
-class TemporalConTransposed1d(nn.ConvTransposed1d):
+class TemporalConvTransposed1d(nn.ConvTranspose1d):
     """ConvTranspose1d analogue with controlled buffering for causal decoding."""
     def __init__(self, 
                 in_channels: int, 
                 out_channels: int, 
                 kernel_size: int, 
                 stride: int, 
-                padding: int, 
+                padding: int = 0, 
                 output_padding: int = 0,
                 groups: int = 1,
                 bias: bool = True,
                 dilation: int=1, 
                 padding_mode: str = "zeros",
-                buffer: Optional[Union[int,float, mx.array]] = None,
                 causal: bool = False,
                 look_ahead: int = 0):
         """Validate arguments and prepare TemporalPad1d-based buffering."""
@@ -132,18 +143,15 @@ class TemporalConTransposed1d(nn.ConvTransposed1d):
 
         
 
-        super(TemporalConTransposed1d, self).__init__(
+        super(TemporalConvTransposed1d, self).__init__(
             in_channels, out_channels, kernel_size, stride,
             padding, dilation, output_padding)
-        
+
         self.padder = TemporalPad1d(padding=self.buffer_size,
                                     in_channels=in_channels,
+                                    buffer=None,
                                     padding_mode=padding_mode,
                                     causal=self.causal)
-
-        if buffer is None:
-            buffer = mx.zeros((1, in_channels, self.buffer_size))
-        self.buffer = buffer
 
     def reset_buffer(self):
         """Delegate buffer reset to the internal padder."""
@@ -153,10 +161,12 @@ class TemporalConTransposed1d(nn.ConvTransposed1d):
         """Perform causal or non-causal transpose convolution with buffering."""
         if self.causal:
             out = self.padder(x, inference, buffer_io)
-            out = super(x)
-            out = out[..., self.upsampling_factor: - self.upsampling_factor]
+            out = super(TemporalConvTransposed1d, self).__call__(out)
+            # Trim edges in the time dimension (axis=1), format is (batch, time, channels)
+            out = out[:, self.upsampling_factor: - self.upsampling_factor, :]
         else:
-            out = super(x)
+            out = super(TemporalConvTransposed1d, self).__call__(x)
             if self.upsampling_factor % 2 == 1:
-                out = out[..., :-1]
+                # Trim last timestep
+                out = out[:, :-1, :]
         return out

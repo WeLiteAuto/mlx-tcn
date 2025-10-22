@@ -5,10 +5,8 @@ from buffer import BufferIO
 
 
 PADDING_MODES = [
-    "reflect",
-    "replicate",
-    "circular",
     "zeros",
+    "replicate",
 ]
 
 class TemporalPad1d(nn.Module):
@@ -92,12 +90,8 @@ class TemporalPad1d(nn.Module):
         else:
             if self.padding_mode == "zeros":
                 x = mx.pad(x, ((0, 0), (self.left_padding, self.right_padding), (0, 0)), mode="constant", constant_values=0)
-            elif self.padding_mode == "reflect":
-                x = mx.pad(x, ((0, 0), (self.left_padding, self.right_padding), (0, 0)), mode="reflect")
             elif self.padding_mode == "replicate":
                 x = mx.pad(x, ((0, 0), (self.left_padding, self.right_padding), (0, 0)), mode="edge")
-            elif self.padding_mode == "circular":
-                x = mx.pad(x, ((0, 0), (self.left_padding, self.right_padding), (0, 0)), mode="wrap")
             else:
                 raise ValueError(f"""Invalid padding mode: {self.padding_mode}""")
 
