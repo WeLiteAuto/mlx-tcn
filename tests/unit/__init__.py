@@ -1,2 +1,1 @@
-"""Unit tests for the mlx-tcn package."""
-
+"""Unit tests for the mlx_tcn package."""

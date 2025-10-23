@@ -1,17 +1,9 @@
 #!/usr/bin/env python3
-"""
-Quick example demonstrating the MLX-TCN functionality.
-"""
+"""Quick example demonstrating MLX-TCN functionality."""
 
 import mlx.core as mx
-import sys
-import os
 
-# Add mlx-tcn to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'mlx-tcn'))
-
-from tcn import TCN
-from buffer import BufferIO
+from mlx_tcn import BufferIO, TCN
 
 def example_basic_tcn():
     """Example 1: Basic TCN usage."""
@@ -201,4 +193,3 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
-

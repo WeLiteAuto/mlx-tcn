@@ -4,12 +4,12 @@ import sys
 import mlx.core as mx
 
 tests_dir = os.path.dirname(__file__)
-project_src = os.path.abspath(os.path.join(tests_dir, "..", "..", "mlx-tcn"))
-if project_src not in sys.path:
-    sys.path.insert(0, project_src)
+project_root = os.path.abspath(os.path.join(tests_dir, "..", ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-from pad import TemporalPad1d, PADDING_MODES  # noqa: E402
-from buffer import BufferIO  # noqa: E402
+from mlx_tcn.buffer import BufferIO  # noqa: E402
+from mlx_tcn.pad import PADDING_MODES, TemporalPad1d  # noqa: E402
 
 
 class AssertionError_(Exception):

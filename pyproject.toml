@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlx-tcn"
+version = "0.1.0"
+description = "Temporal Convolutional Networks implemented on Apple MLX."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["mlx"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Source = "https://github.com/aaronge/mlx-tcn"
+
+[tool.setuptools]
+packages = ["mlx_tcn"]

@@ -4,8 +4,8 @@ import mlx.core as mx
 import mlx.nn as nn
 from typing import Union, Optional
 
-from pad import TemporalPad1d
-from buffer import BufferIO
+from .pad import TemporalPad1d
+from .buffer import BufferIO
 
 class TemporalConv1d(nn.Conv1d):
     """Conv1d variant that auto-computes padding and maintains a temporal buffer."""

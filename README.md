@@ -113,7 +113,7 @@ stream_out = model(chunk, embeddings=None, inference=True, in_buffer=buffers)
 
 - Use causal convolutions (`causal=True`) for autoregressive tasks. Non-causal mode (default) behaves like same-padding convolutions for sequence tagging.
 - Adjust dilation growth through `dilations` or `dilation_reset` to control receptive field size.
-- The `kernel_initilaizer` argument accepts keys from `mlx-tcn/utils.py`—e.g. `"xavier_normal"`, `"he_uniform"`.
+- The `kernel_initilaizer` argument accepts keys from `mlx_tcn/utils.py`—e.g. `"xavier_normal"`, `"he_uniform"`.
 - When enabling skip connections, the model will project per-block outputs to the last channel width and sum them before the final activation.
 
 ## Tests
@@ -128,7 +128,7 @@ python -m pytest tests/unit
 
 ```
 mlx-tcn/
-├── mlx-tcn/
+├── mlx_tcn/
 │   ├── __init__.py
 │   ├── buffer.py          # BufferIO for streaming chunk management
 │   ├── conv.py            # TemporalConv1d / TemporalConvTransposed1d

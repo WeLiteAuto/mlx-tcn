@@ -1,2 +1,1 @@
-"""Test suite package for mlx-tcn."""
-
+"""Test suite package for mlx_tcn."""

@@ -1,7 +1,9 @@
+from typing import Optional, Union
+
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Union, Optional
-from buffer import BufferIO
+
+from .buffer import BufferIO
 
 
 PADDING_MODES = [

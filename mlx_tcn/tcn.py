@@ -1,13 +1,15 @@
-import mlx.core as mx
-import mlx.nn as nn 
-from typing import Optional, Union, Tuple, List, Callable, Type
-from collections.abc import Iterable
-from mlx.nn.layers.normalization import InstanceNorm
-from conv import TemporalConv1d, TemporalConvTransposed1d
-from pad import TemporalPad1d
-from buffer import BufferIO
-from utils import calculate_gain
 import math
+from collections.abc import Iterable
+from typing import Callable, List, Optional, Tuple, Type, Union
+
+import mlx.core as mx
+import mlx.nn as nn
+from mlx.nn.layers.normalization import InstanceNorm
+
+from .buffer import BufferIO
+from .conv import TemporalConv1d, TemporalConvTransposed1d
+from .pad import TemporalPad1d
+from .utils import calculate_gain
 
 
 activation_fn = dict(
