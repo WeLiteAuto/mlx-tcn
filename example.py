@@ -14,7 +14,7 @@ def example_basic_tcn():
     model = TCN(
         num_inputs=32,
         num_channels=[64, 64, 128],
-        kernel_size=3,
+        kernel_sizes=3,
         dropout=0.1,
         causal=False,
         use_norm="batch_norm",
@@ -42,7 +42,7 @@ def example_tcn_with_skip_connections():
     model = TCN(
         num_inputs=16,
         num_channels=[32, 64, 64],
-        kernel_size=5,
+        kernel_sizes=5,
         use_skip_connections=True,
         output_projection=10,
         output_activation="tanh",
@@ -69,7 +69,7 @@ def example_tcn_with_embeddings():
     model = TCN(
         num_inputs=8,
         num_channels=[16, 32],
-        kernel_size=3,
+        kernel_sizes=3,
         embedding_shapes=[(12,)],
         embedding_mode="concat",
         causal=False,
@@ -97,7 +97,7 @@ def example_causal_streaming():
     model = TCN(
         num_inputs=4,
         num_channels=[8, 16],
-        kernel_size=3,
+        kernel_sizes=3,
         causal=True,
         dropout=0.0,
     )
@@ -130,16 +130,44 @@ def example_causal_streaming():
     print("✓ Streaming inference works!\n")
 
 
-def example_all_features():
-    """Example 5: TCN with all features enabled."""
+def example_variable_kernel_sizes():
+    """Example 5: TCN with different kernel sizes per layer."""
     print("="*70)
-    print("Example 5: TCN with All Features")
+    print("Example 5: TCN with Variable Kernel Sizes")
     print("="*70)
     
     model = TCN(
         num_inputs=8,
         num_channels=[16, 32, 64],
-        kernel_size=3,
+        kernel_sizes=[3, 5, 7],  # Different kernel size per layer
+        causal=False,
+    )
+    
+    batch, seq_len = 2, 50
+    x = mx.random.normal((batch, seq_len, 8))
+    output = model(x, embeddings=None, inference=False)
+    
+    print(f"Input shape:  {x.shape}")
+    print(f"Output shape: {output.shape}")
+    print(f"Kernel sizes: [3, 5, 7] (different per layer)")
+    print(f"Number of layers: {len(model.network)}")
+    for idx, block in enumerate(model.network):
+        # MLX Conv1d weight shape: (out_channels, kernel_size, in_channels)
+        ks = block.conv1.weight.shape[1]
+        print(f"  Layer {idx+1} kernel size: {ks}")
+    print("✓ Variable kernel sizes work!\n")
+
+
+def example_all_features():
+    """Example 6: TCN with all features enabled."""
+    print("="*70)
+    print("Example 6: TCN with All Features")
+    print("="*70)
+    
+    model = TCN(
+        num_inputs=8,
+        num_channels=[16, 32, 64],
+        kernel_sizes=3,
         dilations=[1, 2, 4],
         dropout=0.1,
         causal=True,
@@ -182,6 +210,7 @@ if __name__ == "__main__":
         example_tcn_with_skip_connections()
         example_tcn_with_embeddings()
         example_causal_streaming()
+        example_variable_kernel_sizes()
         example_all_features()
         
         print("="*70)

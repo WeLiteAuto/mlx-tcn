@@ -636,6 +636,61 @@ def test_temporal_block_embedding_weights_initialized():
     assert mx.sum(mx.abs(w2)) > 0
 
 
+def test_temporal_block_embeddings_optional():
+    """Test that embeddings parameter is truly optional (can be None)."""
+    # Block configured with embeddings
+    block_with_emb_config = TemporalBlock(
+        in_channels=4, out_channels=8, kernel_size=3, stride=1,
+        dilation=1, dropout=0.0, causal=False, norm=None,
+        activation="relu", kernel_init="he_normal",
+        embedding_dims=[(16,)], embedding_mode="add", use_gate=False
+    )
+    
+    # Block without embedding configuration
+    block_no_emb_config = TemporalBlock(
+        in_channels=4, out_channels=8, kernel_size=3, stride=1,
+        dilation=1, dropout=0.0, causal=False, norm=None,
+        activation="relu", kernel_init="he_normal",
+        embedding_dims=None, embedding_mode="add", use_gate=False
+    )
+    
+    x = mx.random.normal((2, 10, 4))
+    
+    # Test 1: Block without embedding config, embeddings=None (default)
+    out1, _ = block_no_emb_config(x)  # embeddings defaults to None
+    assert out1.shape == (2, 10, 8)
+    
+    # Test 2: Block without embedding config, explicit embeddings=None
+    out2, _ = block_no_emb_config(x, embeddings=None)
+    assert out2.shape == (2, 10, 8)
+    
+    # Test 3: Block with embedding config, embeddings=None should skip embedding
+    # This should work now that we have 'if embeddings is not None' check
+    out3, _ = block_with_emb_config(x, embeddings=None)
+    assert out3.shape == (2, 10, 8)
+
+
+def test_temporal_block_default_parameters():
+    """Test TemporalBlock can be called with default parameters."""
+    block = TemporalBlock(
+        in_channels=4, out_channels=8, kernel_size=3, stride=1,
+        dilation=1, dropout=0.0, causal=False, norm=None,
+        activation="relu", kernel_init="he_normal",
+        embedding_dims=None, embedding_mode="add", use_gate=False
+    )
+    
+    x = mx.random.normal((2, 10, 4))
+    
+    # Call with only required argument (x)
+    out, residual = block(x)
+    assert out.shape == (2, 10, 8)
+    assert residual.shape == (2, 10, 8)
+    
+    # Explicitly test default values
+    out2, residual2 = block(x, embeddings=None, inference=False, in_buffer=None)
+    assert out2.shape == (2, 10, 8)
+
+
 # ============================================================================
 # Normalization Tests
 # ============================================================================
@@ -726,7 +781,7 @@ def test_tcn_init_basic():
     tcn = TCN(
         num_inputs=4,
         num_channels=[8, 16, 32],
-        kernel_size=3,
+        kernel_sizes=3,
         dropout=0.1,
         causal=True,
         use_norm="batch_norm",
@@ -749,7 +804,7 @@ def test_tcn_init_with_custom_dilations():
     tcn = TCN(
         num_inputs=4,
         num_channels=[8, 16, 32, 64],
-        kernel_size=3,
+        kernel_sizes=3,
         dilations=custom_dilations,
         causal=True
     )
@@ -763,7 +818,7 @@ def test_tcn_init_with_dilation_reset():
     tcn = TCN(
         num_inputs=4,
         num_channels=[8, 16, 32, 64, 128],
-        kernel_size=3,
+        kernel_sizes=3,
         dilation_reset=4,
         causal=True
     )
@@ -771,6 +826,42 @@ def test_tcn_init_with_dilation_reset():
     # dilation_reset=4 -> log2(4*2)=3, so pattern repeats every 3: [1, 2, 4, 1, 2]
     expected_dilations = [1, 2, 4, 1, 2]
     assert tcn.dilations == expected_dilations
+
+
+def test_tcn_init_with_kernel_sizes_list():
+    """Test TCN with list of kernel sizes (different per layer)."""
+    custom_kernel_sizes = [3, 5, 7, 9]
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16, 32, 64],
+        kernel_sizes=custom_kernel_sizes,
+        causal=True
+    )
+    
+    assert len(tcn.network) == 4
+    # Verify each block has the correct kernel size by checking weight shape
+    # MLX Conv1d weight shape: (out_channels, kernel_size, in_channels)
+    for idx, block in enumerate(tcn.network):
+        expected_ks = custom_kernel_sizes[idx]
+        assert block.conv1.weight.shape[1] == expected_ks
+        assert block.conv2.weight.shape[1] == expected_ks
+
+
+def test_tcn_init_with_kernel_sizes_single_value():
+    """Test TCN with single kernel size value (broadcast to all layers)."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16, 32],
+        kernel_sizes=5,  # Will be expanded to [5, 5, 5]
+        causal=True
+    )
+    
+    assert len(tcn.network) == 3
+    # Verify all blocks have the same kernel size
+    # MLX Conv1d weight shape: (out_channels, kernel_size, in_channels)
+    for block in tcn.network:
+        assert block.conv1.weight.shape[1] == 5
+        assert block.conv2.weight.shape[1] == 5
 
 
 def test_tcn_init_dilations_length_mismatch():
@@ -890,7 +981,7 @@ def test_tcn_forward_basic():
     tcn = TCN(
         num_inputs=in_ch,
         num_channels=[8, 16, 32],
-        kernel_size=3,
+        kernel_sizes=3,
         causal=False
     )
     
@@ -965,7 +1056,7 @@ def test_tcn_forward_causal_inference_mode():
     tcn = TCN(
         num_inputs=in_ch,
         num_channels=[8, 16],
-        kernel_size=3,
+        kernel_sizes=3,
         causal=True
     )
     
@@ -1054,7 +1145,7 @@ def test_tcn_streaming_inference():
     tcn = TCN(
         num_inputs=in_ch,
         num_channels=[8, 16],
-        kernel_size=3,
+        kernel_sizes=3,
         causal=True
     )
     
@@ -1082,7 +1173,7 @@ def test_tcn_with_all_features():
     tcn = TCN(
         num_inputs=in_ch,
         num_channels=[8, 16, 32],
-        kernel_size=3,
+        kernel_sizes=3,
         dilations=[1, 2, 4],
         dropout=0.1,
         causal=True,
@@ -1118,7 +1209,7 @@ def test_tcn_multiple_layers():
     tcn = TCN(
         num_inputs=4,
         num_channels=[8, 16, 32, 64, 128],
-        kernel_size=3,
+        kernel_sizes=3,
         causal=False
     )
     
@@ -1220,7 +1311,7 @@ def test_tcn_with_buffer_io():
     tcn = TCN(
         num_inputs=4,
         num_channels=[8, 16],
-        kernel_size=3,
+        kernel_sizes=3,
         causal=True
     )
     
@@ -1233,6 +1324,81 @@ def test_tcn_with_buffer_io():
     
     assert out.shape[0] == 1
     assert out.shape[2] == 16
+
+
+def test_tcn_embeddings_optional():
+    """Test that TCN embeddings parameter is optional."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=False
+    )
+    
+    x = mx.random.normal((2, 10, 4))
+    
+    # Call with default embeddings (None)
+    out1 = tcn(x)
+    assert out1.shape == (2, 10, 16)
+    
+    # Call with explicit embeddings=None
+    out2 = tcn(x, embeddings=None)
+    assert out2.shape == (2, 10, 16)
+    
+    # Both should give same result
+    assert out1.shape == out2.shape
+
+
+def test_tcn_return_value_single():
+    """Test that TCN returns single array (not tuple)."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=False
+    )
+    
+    x = mx.random.normal((2, 10, 4))
+    out = tcn(x)
+    
+    # Verify return type is mx.array, not tuple
+    assert isinstance(out, mx.array)
+    assert out.shape == (2, 10, 16)
+
+
+def test_tcn_with_embeddings_optional_parameter():
+    """Test TCN with embedding config can be called without providing embeddings."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        embedding_shapes=[(12,)],
+        embedding_mode="add",
+        causal=False
+    )
+    
+    x = mx.random.normal((2, 10, 4))
+    
+    # Should work even though embedding_shapes is configured
+    # but embeddings=None is provided
+    out = tcn(x, embeddings=None)
+    assert out.shape == (2, 10, 16)
+
+
+def test_tcn_default_inference_false():
+    """Test TCN with default inference parameter."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=True
+    )
+    
+    x = mx.random.normal((2, 10, 4))
+    
+    # Call without specifying inference (defaults to False)
+    out = tcn(x)
+    assert out.shape == (2, 10, 16)
 
 
 # ============================================================================
@@ -1282,6 +1448,8 @@ if __name__ == "__main__":
         test_temporal_block_embedding_mode_concat,
         test_temporal_block_embedding_mode_invalid,
         test_temporal_block_embedding_weights_initialized,
+        test_temporal_block_embeddings_optional,
+        test_temporal_block_default_parameters,
         
         # Normalization tests
         test_temporal_block_batch_norm_with_gate,
@@ -1295,6 +1463,8 @@ if __name__ == "__main__":
         test_tcn_init_basic,
         test_tcn_init_with_custom_dilations,
         test_tcn_init_with_dilation_reset,
+        test_tcn_init_with_kernel_sizes_list,
+        test_tcn_init_with_kernel_sizes_single_value,
         test_tcn_init_dilations_length_mismatch,
         test_tcn_init_look_ahead_nonzero,
         test_tcn_init_with_skip_connections,
@@ -1319,6 +1489,10 @@ if __name__ == "__main__":
         test_tcn_different_norms,
         test_tcn_embedding_mode_add_vs_concat,
         test_tcn_with_buffer_io,
+        test_tcn_embeddings_optional,
+        test_tcn_return_value_single,
+        test_tcn_with_embeddings_optional_parameter,
+        test_tcn_default_inference_false,
     ]
     
     passed = 0

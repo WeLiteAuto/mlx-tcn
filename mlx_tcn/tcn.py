@@ -333,7 +333,7 @@ class TemporalBlock(BaseTCN):
         return out
 
     def __call__(self, x: mx.array, 
-                embeddings: Union[List[mx.array], mx.array], 
+                embeddings: Optional[Union[List[mx.array], mx.array]] = None, 
                 inference: bool = False, 
                 in_buffer: Optional[List[BufferIO]] = None) -> Tuple[mx.array, mx.array]:
         if in_buffer is not None:
@@ -363,14 +363,14 @@ class TCN(BaseTCN):
     def __init__(self,
                 num_inputs: int,
                 num_channels: Union[List[int], mx.array],
-                kernel_size: int = 4,
+                kernel_sizes: Union[List[int], int] = 4,
                 dilations: Optional[ Union[List[int], mx.array]] = None,
                 dilation_reset: Optional[int] = None,
                 dropout: float = 0.1,
                 causal: bool = False,
                 use_norm: str = "batch_norm",
                 activation: str = "relu",
-                kernel_initilaizer: str = "xavier_normal",
+                kernel_initilaizer: str = "he_normal",
                 use_skip_connections: bool = False,
                 embedding_shapes: Optional[List[Tuple]] = None,
                 embedding_mode: str = "add",
@@ -448,11 +448,15 @@ class TCN(BaseTCN):
         else:
             self.downsample_skip_connection = None
 
+        if isinstance(kernel_sizes, int):
+            kernel_sizes = [kernel_sizes] * len(num_channels)
+
         self.network : List[TemporalBlock] = []
         for ii in range(len(num_channels)):
             dilation = self.dilations[ii]
             in_channels = num_inputs if ii == 0 else num_channels[ii - 1]
             out_channels = num_channels[ii]
+            kernel_size = kernel_sizes[ii]
             self.network.append(TemporalBlock(in_channels=in_channels,
                                               out_channels=out_channels,
                                               kernel_size=kernel_size,
@@ -503,9 +507,9 @@ class TCN(BaseTCN):
                 layer.weight = init_fn(layer.weight)
 
     def __call__(self, x: mx.array, 
-                embeddings: Union[List[mx.array], mx.array], 
+                embeddings: Optional[Union[List[mx.array], mx.array]] = None, 
                 inference: bool = False, 
-                in_buffer: Optional[List[BufferIO]] = None) -> Tuple[mx.array, mx.array]:
+                in_buffer: Optional[List[BufferIO]] = None) -> mx.array:
         
         if inference and (not self.causal):
             raise ValueError(f"""
