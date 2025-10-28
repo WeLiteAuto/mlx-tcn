@@ -795,7 +795,7 @@ def test_tcn_init_basic():
     assert tcn.output_projection is None
     assert tcn.output_activation is None
     assert len(tcn.dilations) == 3
-    assert tcn.dilations == [1, 2, 4]  # Default exponential dilations
+    assert tcn.dilations == (1, 2, 4)  # Default exponential dilations (tuple)
 
 
 def test_tcn_init_with_custom_dilations():
@@ -809,7 +809,8 @@ def test_tcn_init_with_custom_dilations():
         causal=True
     )
     
-    assert tcn.dilations == custom_dilations
+    # TCN converts dilations to tuple internally
+    assert tcn.dilations == tuple(custom_dilations)
     assert len(tcn.network) == 4
 
 
@@ -824,7 +825,7 @@ def test_tcn_init_with_dilation_reset():
     )
     
     # dilation_reset=4 -> log2(4*2)=3, so pattern repeats every 3: [1, 2, 4, 1, 2]
-    expected_dilations = [1, 2, 4, 1, 2]
+    expected_dilations = (1, 2, 4, 1, 2)  # TCN stores as tuple
     assert tcn.dilations == expected_dilations
 
 
@@ -940,7 +941,8 @@ def test_tcn_init_with_embeddings():
         causal=True
     )
     
-    assert tcn.embedding_shapes == [(12,), (24,)]
+    # TCN converts embedding_shapes to tuple of tuples internally
+    assert tcn.embedding_shapes == ((12,), (24,))
     assert tcn.embedding_mode == "add"
     # All blocks should have embedding layers
     for block in tcn.network:
@@ -1240,13 +1242,21 @@ def test_tcn_skip_connections_weights_initialized():
 
 def test_tcn_different_activations():
     """Test TCN with different activation functions."""
-    activations = ["relu", "gelu", "tanh", "silu"]
+    # Test different activation and initializer combinations
+    # Note: he_normal only supports relu/leaky_relu, others need xavier
+    test_configs = [
+        ("relu", "he_normal"),
+        ("gelu", "xavier_normal"),  # gelu requires xavier initializer
+        ("tanh", "xavier_normal"),  # tanh works better with xavier
+        ("silu", "he_normal"),
+    ]
     
-    for act in activations:
+    for act, kernel_init in test_configs:
         tcn = TCN(
             num_inputs=4,
             num_channels=[8, 16],
             activation=act,
+            kernel_initilaizer=kernel_init,  # Note: typo in parameter name exists in codebase
             causal=False
         )
         

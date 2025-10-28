@@ -161,9 +161,9 @@ class TemporalBlock(BaseTCN):
         self.norm = norm
         self.activation = activation
         self.kernel_init = kernel_init
-        self.embedding_dims = embedding_dims
         self.use_gate = use_gate
         self.causal = causal
+        object.__setattr__(self, "_embedding_dims", None)
 
         if self.use_gate:
             conv1d_n_outputs = 2 * out_channels
@@ -234,6 +234,14 @@ class TemporalBlock(BaseTCN):
         self.dropout2 = nn.Dropout(p=dropout)
         self.downSample = nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=1) if in_channels != out_channels else None
         
+        if embedding_dims is not None:
+            sanitized_dims = []
+            for shape in embedding_dims:
+                if not isinstance(shape, (tuple, list)):
+                    raise ValueError("Embedding dims must be tuple/list of integers.")
+                sanitized_dims.append(tuple(shape))
+            object.__setattr__(self, "_embedding_dims", tuple(sanitized_dims))
+
         if self.embedding_dims is not None:
             # Embedding projections support both 'concat' and 'add' modes
             if self.use_gate:
@@ -241,14 +249,17 @@ class TemporalBlock(BaseTCN):
             else:
                 embedding_layer_n_outputs = out_channels
             
-            self.embedding_projection1 = \
-                nn.Conv1d(in_channels= sum([ shape[0] for shape in embedding_dims]),
-                        out_channels=embedding_layer_n_outputs, 
-                        kernel_size=1)
-            self.embedding_projection2 = \
-                nn.Conv1d(in_channels= 2 * embedding_layer_n_outputs,
-                        out_channels=embedding_layer_n_outputs, 
-                        kernel_size=1)
+            embedding_total_in = sum(shape[0] for shape in self.embedding_dims)
+            self.embedding_projection1 = nn.Conv1d(
+                in_channels=embedding_total_in,
+                out_channels=embedding_layer_n_outputs,
+                kernel_size=1,
+            )
+            self.embedding_projection2 = nn.Conv1d(
+                in_channels=2 * embedding_layer_n_outputs,
+                out_channels=embedding_layer_n_outputs,
+                kernel_size=1,
+            )
         self.embedding_mode = embedding_mode
         
         self.init_weights()
@@ -357,6 +368,10 @@ class TemporalBlock(BaseTCN):
         res = x if self.downSample is None else self.downSample(x)
         return self.activation_final(res + out), out
 
+    @property
+    def embedding_dims(self):
+        return getattr(self, "_embedding_dims", None)
+
 
 
 class TCN(BaseTCN):
@@ -397,11 +412,11 @@ class TCN(BaseTCN):
                 dilation_reset = int(mx.log2(dilation_reset * 2))
                 dilations = [2 ** (ii % dilation_reset) for ii in range(len(num_channels))]
         
-        self.dilations = dilations
+        object.__setattr__(self, "_dilations", tuple(dilations))
         self.activation = activation
         self.kernel_init = kernel_initilaizer
         self.use_skip_connections = use_skip_connections
-        self.embedding_shapes = embedding_shapes
+        object.__setattr__(self, "_embedding_shapes", None)
         self.embedding_mode = embedding_mode
         self.use_gate = use_gate
         self.causal = causal
@@ -411,6 +426,7 @@ class TCN(BaseTCN):
 
         if embedding_shapes is not None:
             if isinstance(embedding_shapes, Iterable):
+                sanitized_shapes = []
                 for shape in embedding_shapes:
                     if not isinstance(shape, tuple):
                         try:
@@ -420,9 +436,12 @@ class TCN(BaseTCN):
 
                     if len(shape) not in [1, 2]:
                         raise ValueError(f"Invalid embedding shape: {shape}. Must be a tuple of one or two integers.")
-                    
+                    sanitized_shapes.append(shape)
             else:
                 raise ValueError(f"Invalid embedding shapes: {embedding_shapes}. Must be an iterable of tuples of one or two integers.")
+            object.__setattr__(self, "_embedding_shapes", tuple(sanitized_shapes))
+        else:
+            object.__setattr__(self, "_embedding_shapes", None)
         
         if use_skip_connections:
             self.downsample_skip_connection : List[Optional[nn.Module]] = []
@@ -494,6 +513,14 @@ class TCN(BaseTCN):
         
         if self.causal:
             self.reset_buffers()
+
+    @property
+    def dilations(self):
+        return getattr(self, "_dilations", tuple())
+
+    @property
+    def embedding_shapes(self):
+        return getattr(self, "_embedding_shapes", None)
 
 
     def init_skip_connections_weights(self):
