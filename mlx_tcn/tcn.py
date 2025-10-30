@@ -4,12 +4,12 @@ from typing import Callable, List, Optional, Tuple, Type, Union
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx.nn.layers.normalization import InstanceNorm
 
 from .buffer import BufferIO
 from .conv import TemporalConv1d, TemporalConvTransposed1d
 from .pad import TemporalPad1d
-from .utils import calculate_gain
+from .init import calculate_gain
+from .parametrizations import weight_norm
 
 
 activation_fn = dict(
@@ -17,7 +17,7 @@ activation_fn = dict(
     leaky_relu=nn.LeakyReLU,
     gelu=nn.GELU,
     elu=nn.ELU,
-    silu=nn.SiLU,
+    selu=nn.SELU,
     tanh=nn.Tanh,
     sigmoid=nn.Sigmoid,
     softmax=nn.Softmax,
@@ -98,7 +98,7 @@ class BaseTCN(nn.Module):
         """Run the model in inference mode by forcing `inference=True`."""
         return self(*arg, inference=True, **kwargs)
 
-    def init_weight(self):
+    def init_weights(self):
         """Reinitialize convolution weights with a small normal distribution."""
         def _init_weight(name: str, m: nn.Module):    
             if isinstance(m, (nn.Conv1d, nn.ConvTranspose1d)):
@@ -122,14 +122,14 @@ class BaseTCN(nn.Module):
         return buffers
 
 
-    # def get_in_buffers(self, *args, **kwargs) -> List[mx.array]:
-    #     """Return buffers ordered by usage during a streaming forward pass."""
-    #     buffers = self.get_buffers()
-    #     buffer_io = BufferIO(in_buffers=None)
-    #     self(*args, inference=True, in_buffer=buffer_io, **kwargs)
-    #     in_buffers = buffer_io.internal_buffer
-    #     self.set_buffers(buffers)
-    #     return in_buffers
+    def get_in_buffers(self, *args, **kwargs) -> List[mx.array]:
+        """Return buffers ordered by usage during a streaming forward pass."""
+        buffers = self.get_buffers()
+        buffer_io = BufferIO(in_buffers=None)
+        self(*args, inference=True, in_buffer=buffer_io, **kwargs)
+        in_buffers = buffer_io.internal_buffer
+        self.set_buffers(buffers)
+        return in_buffers
 
 
     def set_buffers(self, buffers: List[mx.array]):
@@ -196,6 +196,11 @@ class TemporalBlock(BaseTCN):
             else:
                 self.norm1 = nn.LayerNorm(dims=out_channels)
             self.norm2 = nn.LayerNorm(dims=out_channels)
+        elif norm == "weight_norm":
+            self.norm1 = None
+            self.norm2 = None
+            self.conv1 = weight_norm(self.conv1)
+            self.conv2 = weight_norm(self.conv2)
         elif norm is None:
             self.norm1 = None
             self.norm2 = None
@@ -537,7 +542,7 @@ class TCN(BaseTCN):
                 embeddings: Optional[Union[List[mx.array], mx.array]] = None, 
                 inference: bool = False, 
                 in_buffer: Optional[List[BufferIO]] = None) -> mx.array:
-        
+       
         if inference and (not self.causal):
             raise ValueError(f"""
                 Streaming inference is only supported for causal TCNs.

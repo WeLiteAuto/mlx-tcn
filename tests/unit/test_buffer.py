@@ -61,12 +61,14 @@ def test_buffer_io_init_with_buffers():
 
 
 def test_buffer_io_iterator():
-    """Test that BufferIO can be used as an iterator."""
+    """Test that BufferIO can be used as an iterator with None termination."""
     input_buffers = [mx.array([1]), mx.array([2]), mx.array([3])]
     bio = BufferIO(in_buffers=input_buffers)
     
     results = []
     for buf in bio:
+        if buf is None:
+            break
         results.append(buf)
     
     assert len(results) == 3
@@ -86,17 +88,18 @@ def test_buffer_io_next():
     buf2 = next(bio)
     assert mx.array_equal(buf2, mx.array([30, 40]))
     
-    # Should raise StopIteration when exhausted
-    with pytest.raises(StopIteration):
-        next(bio)
+    # Should return None when exhausted
+    buf3 = next(bio)
+    assert buf3 is None
 
 
 def test_buffer_io_next_empty():
-    """Test __next__ on empty BufferIO raises StopIteration."""
+    """Test __next__ on empty BufferIO returns None."""
     bio = BufferIO()
     
-    with pytest.raises(StopIteration):
-        next(bio)
+    # Should return None when in_buffer is None
+    result = next(bio)
+    assert result is None
 
 
 def test_buffer_io_next_in_buffer():
@@ -112,9 +115,18 @@ def test_buffer_io_next_in_buffer():
     assert buf2 is not None
     assert mx.array_equal(buf2, mx.array([3, 4]))
     
-    # Should return None when exhausted instead of raising
+    # next_in_buffer should return None when exhausted instead of raising
     buf3 = bio.next_in_buffer()
     assert buf3 is None
+
+
+def test_buffer_io_next_in_buffer_empty():
+    """Test next_in_buffer on empty BufferIO returns None."""
+    bio = BufferIO()
+    
+    # Should return None when in_buffer is None
+    result = bio.next_in_buffer()
+    assert result is None
 
 
 def test_buffer_io_append_out_buffer():
@@ -252,19 +264,27 @@ def test_buffer_io_streaming_workflow():
     bio.internal_buffer = []
     
     # Process first chunk
-    for i, layer_buffer in enumerate(bio):
+    i = 0
+    for layer_buffer in bio:
+        if layer_buffer is None:
+            break
         # Simulate processing with each layer's buffer
         processed = layer_buffer + mx.ones_like(layer_buffer) * (i + 1)
         bio.append_out_buffer(processed)
+        i += 1
     
     bio.step()
     
     # Process second chunk - buffers should have updated values
-    for i, layer_buffer in enumerate(bio):
+    i = 0
+    for layer_buffer in bio:
+        if layer_buffer is None:
+            break
         assert layer_buffer.shape == [(1, 4, 8), (1, 4, 16), (1, 4, 32)][i]
         # First layer buffer should be all 1s, second all 2s, third all 3s
         expected = mx.ones_like(layer_buffer) * (i + 1)
         assert mx.allclose(layer_buffer, expected)
+        i += 1
 
 
 if __name__ == "__main__":
@@ -276,6 +296,7 @@ if __name__ == "__main__":
         test_buffer_io_next,
         test_buffer_io_next_empty,
         test_buffer_io_next_in_buffer,
+        test_buffer_io_next_in_buffer_empty,
         test_buffer_io_append_out_buffer,
         test_buffer_io_append_internal_buffer,
         test_buffer_io_step_basic,

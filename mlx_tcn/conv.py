@@ -3,7 +3,6 @@
 import mlx.core as mx
 import mlx.nn as nn
 from typing import Union, Optional
-
 from .pad import TemporalPad1d
 from .buffer import BufferIO
 

@@ -153,6 +153,23 @@ def test_temporal_block_init_with_layer_norm():
     assert isinstance(block.norm2, nn.LayerNorm)
 
 
+def test_temporal_block_init_with_weight_norm():
+    """Test initialization with weight normalization."""
+    block = TemporalBlock(
+        in_channels=4, out_channels=8, kernel_size=3, stride=1,
+        dilation=1, dropout=0.1, causal=False, norm="weight_norm",
+        activation="relu", kernel_init="he_normal",
+        embedding_dims=None, embedding_mode="add", use_gate=False
+    )
+    
+    assert block.norm1 is None
+    assert block.norm2 is None
+    assert hasattr(block.conv1, "_weight_norm_params")
+    assert hasattr(block.conv2, "_weight_norm_params")
+    assert "weight" in block.conv1._weight_norm_params
+    assert "weight" in block.conv2._weight_norm_params
+
+
 def test_temporal_block_init_with_gate():
     """Test initialization with gated activation (GLU)."""
     block = TemporalBlock(
@@ -197,7 +214,7 @@ def test_temporal_block_init_without_downsample():
 
 def test_temporal_block_init_various_activations():
     """Test initialization with different activation functions."""
-    activations = ["relu", "gelu", "tanh", "sigmoid", "silu"]
+    activations = ["relu", "gelu", "tanh", "sigmoid", "selu"]
     
     for act in activations:
         block = TemporalBlock(
@@ -725,6 +742,116 @@ def test_temporal_block_layer_norm_with_gate():
     assert out.shape == (2, 10, 8)
 
 
+def test_temporal_block_weight_norm_basic():
+    """Test basic forward pass with weight normalization."""
+    batch, seq_len, in_ch = 2, 10, 4
+    out_ch = 8
+    
+    block = TemporalBlock(
+        in_channels=in_ch, out_channels=out_ch, kernel_size=3, stride=1,
+        dilation=1, dropout=0.0, causal=True, norm="weight_norm",
+        activation="relu", kernel_init="he_normal",
+        embedding_dims=None, embedding_mode="add", use_gate=False
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out, residual = block(x, embeddings=None, inference=False)
+    
+    # Check output shapes
+    assert out.shape[0] == batch
+    assert out.shape[-1] == out_ch
+    assert residual.shape[-1] == out_ch
+    # Verify weight norm applied to convolutions
+    assert block.norm1 is None and block.norm2 is None
+    assert hasattr(block.conv1, "_weight_norm_params")
+    assert hasattr(block.conv2, "_weight_norm_params")
+
+
+def test_temporal_block_weight_norm_with_gate():
+    """Test weight normalization with gated activation."""
+    batch, seq_len, in_ch = 2, 10, 4
+    out_ch = 8
+    
+    block = TemporalBlock(
+        in_channels=in_ch, out_channels=out_ch, kernel_size=3, stride=1,
+        dilation=1, dropout=0.0, causal=True, norm="weight_norm",
+        activation="tanh", kernel_init="xavier_normal",
+        embedding_dims=None, embedding_mode="add", use_gate=True
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out, residual = block(x, embeddings=None, inference=False)
+    
+    # Check output shapes
+    assert out.shape == (batch, seq_len, out_ch)
+    assert residual.shape == (batch, seq_len, out_ch)
+    # Verify weight norm applied to convolutions (with gating doubling first conv)
+    assert block.norm1 is None and block.norm2 is None
+    params1 = block.conv1._weight_norm_params["weight"]
+    params2 = block.conv2._weight_norm_params["weight"]
+    assert params1["dim"] == 0
+    assert params2["dim"] == 0
+
+
+def test_temporal_block_weight_norm_parameters():
+    """Test that WeightNorm parameters (g and v) are properly initialized."""
+    block = TemporalBlock(
+        in_channels=4, out_channels=8, kernel_size=3, stride=1,
+        dilation=1, dropout=0.0, causal=False, norm="weight_norm",
+        activation="relu", kernel_init="he_normal",
+        embedding_dims=None, embedding_mode="add", use_gate=False
+    )
+    
+    # Weight norm is applied directly to convolution layers
+    assert block.norm1 is None and block.norm2 is None
+    assert hasattr(block.conv1, "weight_v") and hasattr(block.conv1, "weight_g")
+    assert hasattr(block.conv2, "weight_v") and hasattr(block.conv2, "weight_g")
+
+    # Verify parameters are initialized (not all zeros)
+    assert mx.sum(mx.abs(block.conv1.weight_v)) > 0
+    assert mx.sum(mx.abs(block.conv1.weight_g)) > 0
+    assert mx.sum(mx.abs(block.conv2.weight_v)) > 0
+    assert mx.sum(mx.abs(block.conv2.weight_g)) > 0
+
+
+def test_temporal_block_weight_norm_inference():
+    """Test weight normalization in inference mode."""
+    block = TemporalBlock(
+        in_channels=4, out_channels=8, kernel_size=3, stride=1,
+        dilation=1, dropout=0.0, causal=True, norm="weight_norm",
+        activation="relu", kernel_init="he_normal",
+        embedding_dims=None, embedding_mode="add", use_gate=False
+    )
+    
+    x = mx.random.normal((1, 5, 4))
+    out, residual = block(x, embeddings=None, inference=True)
+    
+    assert out.shape == (1, 5, 8)
+    assert residual.shape == (1, 5, 8)
+
+
+def test_temporal_block_weight_norm_with_embeddings():
+    """Test weight normalization with embeddings."""
+    batch, seq_len = 2, 10
+    in_ch, out_ch = 4, 8
+    emb_dim = 16
+    
+    block = TemporalBlock(
+        in_channels=in_ch, out_channels=out_ch, kernel_size=3, stride=1,
+        dilation=1, dropout=0.0, causal=False, norm="weight_norm",
+        activation="relu", kernel_init="he_normal",
+        embedding_dims=[(emb_dim,)], embedding_mode="add", use_gate=False
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    embedding = mx.random.normal((batch, emb_dim))
+    
+    out, _ = block(x, embeddings=embedding, inference=False)
+    
+    # Output shape should match out_channels
+    assert out.shape == (batch, seq_len, out_ch)
+
+
 # ============================================================================
 # Integration Tests
 # ============================================================================
@@ -1248,7 +1375,7 @@ def test_tcn_different_activations():
         ("relu", "he_normal"),
         ("gelu", "xavier_normal"),  # gelu requires xavier initializer
         ("tanh", "xavier_normal"),  # tanh works better with xavier
-        ("silu", "he_normal"),
+        ("selu", "he_normal"),
     ]
     
     for act, kernel_init in test_configs:
@@ -1267,7 +1394,7 @@ def test_tcn_different_activations():
 
 def test_tcn_different_norms():
     """Test TCN with different normalization methods."""
-    norms = ["batch_norm", "layer_norm", None]
+    norms = ["batch_norm", "layer_norm", "weight_norm", None]
     
     for norm in norms:
         tcn = TCN(
@@ -1280,6 +1407,120 @@ def test_tcn_different_norms():
         x = mx.random.normal((2, 10, 4))
         out = tcn(x, embeddings=None, inference=False)
         assert out.shape == (2, 10, 16)
+
+
+def test_tcn_with_weight_norm():
+    """Test TCN with weight normalization."""
+    batch, seq_len = 2, 20
+    in_ch = 4
+    
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16, 32],
+        kernel_sizes=3,
+        use_norm="weight_norm",
+        activation="relu",
+        causal=False
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x, embeddings=None, inference=False)
+    
+    assert out.shape == (batch, seq_len, 32)
+    
+    # Verify that all blocks have weight normalization applied to convolutions
+    for block in tcn.network:
+        assert block.norm1 is None and block.norm2 is None
+        assert hasattr(block.conv1, "_weight_norm_params")
+        assert hasattr(block.conv2, "_weight_norm_params")
+
+
+def test_tcn_weight_norm_with_gate():
+    """Test TCN with weight normalization and gating."""
+    batch, seq_len = 2, 20
+    in_ch = 4
+    
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        use_norm="weight_norm",
+        activation="tanh",
+        use_gate=True,
+        causal=False
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x, embeddings=None, inference=False)
+    
+    assert out.shape == (batch, seq_len, 16)
+    
+    # Verify that all blocks use weight norm on convolutions and GLU activations
+    for block in tcn.network:
+        assert block.norm1 is None and block.norm2 is None
+        assert hasattr(block.conv1, "_weight_norm_params")
+        assert hasattr(block.conv2, "_weight_norm_params")
+        assert isinstance(block.activation1, nn.GLU)
+
+
+def test_tcn_weight_norm_causal_inference():
+    """Test TCN with weight normalization in causal inference mode."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        use_norm="weight_norm",
+        causal=True
+    )
+    
+    # Reset buffers
+    tcn.reset_buffers()
+    
+    # Process multiple chunks
+    chunk1 = mx.random.normal((1, 5, 4))
+    out1 = tcn(chunk1, embeddings=None, inference=True)
+    assert out1.shape == (1, 5, 16)
+    
+    chunk2 = mx.random.normal((1, 5, 4))
+    out2 = tcn(chunk2, embeddings=None, inference=True)
+    assert out2.shape == (1, 5, 16)
+
+
+def test_tcn_weight_norm_with_skip_connections():
+    """Test TCN with weight normalization and skip connections."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16, 32],
+        use_norm="weight_norm",
+        use_skip_connections=True,
+        causal=False
+    )
+    
+    x = mx.random.normal((2, 20, 4))
+    out = tcn(x, embeddings=None, inference=False)
+    
+    assert out.shape == (2, 20, 32)
+
+
+def test_tcn_weight_norm_with_embeddings():
+    """Test TCN with weight normalization and embeddings."""
+    batch, seq_len = 2, 20
+    in_ch = 4
+    
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        use_norm="weight_norm",
+        embedding_shapes=[(12,)],
+        embedding_mode="add",
+        causal=False
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    embedding = mx.random.normal((batch, 12))
+    out = tcn(x, embeddings=embedding, inference=False)
+    
+    assert out.shape == (batch, seq_len, 16)
 
 
 def test_tcn_embedding_mode_add_vs_concat():
@@ -1427,6 +1668,7 @@ if __name__ == "__main__":
         test_temporal_block_init_basic,
         test_temporal_block_init_with_batch_norm,
         test_temporal_block_init_with_layer_norm,
+        test_temporal_block_init_with_weight_norm,
         test_temporal_block_init_with_gate,
         test_temporal_block_init_with_downsample,
         test_temporal_block_init_without_downsample,
@@ -1464,6 +1706,11 @@ if __name__ == "__main__":
         # Normalization tests
         test_temporal_block_batch_norm_with_gate,
         test_temporal_block_layer_norm_with_gate,
+        test_temporal_block_weight_norm_basic,
+        test_temporal_block_weight_norm_with_gate,
+        test_temporal_block_weight_norm_parameters,
+        test_temporal_block_weight_norm_inference,
+        test_temporal_block_weight_norm_with_embeddings,
         
         # Integration tests
         test_temporal_block_stacked,
@@ -1497,6 +1744,11 @@ if __name__ == "__main__":
         test_tcn_skip_connections_weights_initialized,
         test_tcn_different_activations,
         test_tcn_different_norms,
+        test_tcn_with_weight_norm,
+        test_tcn_weight_norm_with_gate,
+        test_tcn_weight_norm_causal_inference,
+        test_tcn_weight_norm_with_skip_connections,
+        test_tcn_weight_norm_with_embeddings,
         test_tcn_embedding_mode_add_vs_concat,
         test_tcn_with_buffer_io,
         test_tcn_embeddings_optional,

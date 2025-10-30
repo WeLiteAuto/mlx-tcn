@@ -4,6 +4,7 @@ from .tcn import BaseTCN, TCN, TemporalBlock
 from .pad import TemporalPad1d
 from .conv import TemporalConv1d, TemporalConvTransposed1d
 from .buffer import BufferIO
+from .parametrizations import weight_norm, remove_weight_norm
 
 __all__ = [
     "BaseTCN",
@@ -13,4 +14,6 @@ __all__ = [
     "TemporalConv1d",
     "TemporalConvTransposed1d",
     "BufferIO",
+    "weight_norm",
+    "remove_weight_norm",
 ]

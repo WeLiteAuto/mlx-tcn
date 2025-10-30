@@ -95,3 +95,4 @@ venv.bak/
 
 # PEP 582 (e.g., pipx, pyflow)
 __pypackages__/
+_ref_pytorch_tcn/

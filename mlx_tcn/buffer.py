@@ -24,11 +24,14 @@ class BufferIO(Iterable):
         return self  
 
     def __next__(self) -> any:
-        """Yield the next input buffer or raise when the iterator is exhausted."""
+        """Yield the next input buffer or return None when exhausted."""
         if self.in_buffer is not None:
-            return next(self.in_buffer)
+            try:
+                return next(self.in_buffer)
+            except StopIteration:
+                return None
         else:
-            raise StopIteration
+            return None
 
     def append_out_buffer(self, x: mx.array):
         """Store an output buffer produced during streaming."""
@@ -40,11 +43,8 @@ class BufferIO(Iterable):
 
     def next_in_buffer(self) -> any:
         """Advance the iterator to the next input buffer."""
-        try:
-            return self.__next__()
-        except StopIteration:
-            return None
-
+        return self.__next__()
+        
     def step(self):
         """Move buffered outputs into the input iterator for the next inference step."""
         if self.in_buffer is None:
