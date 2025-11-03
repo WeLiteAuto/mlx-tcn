@@ -9,7 +9,7 @@ project_root = os.path.abspath(os.path.join(tests_dir, "..", ".."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from mlx_tcn import BaseTCN, BufferIO, TCN, TemporalBlock  # noqa: E402
+from mlx_tcn import BaseTCN, BufferIO, SqueezeExcitation, TCN, TemporalBlock  # noqa: E402
 
 
 class AssertionError_(Exception):
@@ -185,6 +185,34 @@ def test_temporal_block_init_with_gate():
     assert block.conv1['weight'].shape[0] == 2 * 8
 
 
+def test_temporal_block_init_with_se():
+    """Test initialization when SE layer is enabled."""
+    block = TemporalBlock(
+        in_channels=4,
+        out_channels=8,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.1,
+        causal=True,
+        norm=None,
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=False,
+        use_se=True,
+        se_reduction=4,
+        se_residual=True,
+    )
+
+    assert block.use_se is True
+    assert block.se is not None
+    assert isinstance(block.se, SqueezeExcitation)
+    assert block.se_reduction == 4
+    assert block.se_residual is True
+
+
 def test_temporal_block_init_with_downsample():
     """Test initialization with channel mismatch requiring downsampling."""
     in_ch, out_ch = 4, 8
@@ -349,6 +377,35 @@ def test_temporal_block_forward_with_gate():
     out, residual = block(x, embeddings=None, inference=False)
     
     assert out.shape == (batch, seq_len, out_ch)
+
+
+def test_temporal_block_forward_with_se():
+    """Test forward pass when SE layer is enabled."""
+    batch, seq_len, in_ch = 2, 12, 4
+    out_ch = 6
+
+    block = TemporalBlock(
+        in_channels=in_ch,
+        out_channels=out_ch,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.0,
+        causal=False,
+        norm=None,
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=False,
+        use_se=True,
+    )
+
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out, residual = block(x, embeddings=None, inference=False)
+
+    assert out.shape == (batch, seq_len, out_ch)
+    assert residual.shape == (batch, seq_len, out_ch)
 
 
 def test_temporal_block_forward_inference_mode():
@@ -990,6 +1047,29 @@ def test_tcn_init_with_kernel_sizes_single_value():
     for block in tcn.network:
         assert block.conv1.weight.shape[1] == 5
         assert block.conv2.weight.shape[1] == 5
+
+
+def test_tcn_init_with_se_layers():
+    """Test TCN initialization when SE layers are enabled."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[6, 12],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+        se_reduction=2,
+        se_residual=True,
+    )
+
+    assert tcn.use_se is True
+    assert tcn.se_reduction == 2
+    assert tcn.se_residual is True
+    assert len(tcn.network) == 2
+    for block in tcn.network:
+        assert block.use_se is True
+        assert block.se is not None
+        assert block.se_reduction == 2
+        assert block.se_residual is True
 
 
 def test_tcn_init_dilations_length_mismatch():
@@ -1653,6 +1733,679 @@ def test_tcn_default_inference_false():
 
 
 # ============================================================================
+# SqueezeExcitation Comprehensive Tests
+# ============================================================================
+
+def test_se_init_basic():
+    """Test SqueezeExcitation basic initialization."""
+    se = SqueezeExcitation(channels=16)
+    assert se.reduce is not None
+    assert se.expand is not None
+    assert isinstance(se.activation, nn.ReLU)
+    assert isinstance(se.gate, nn.Sigmoid)
+
+
+def test_se_init_with_reduction():
+    """Test SqueezeExcitation with custom reduction ratio."""
+    channels = 16
+    reduction = 4
+    se = SqueezeExcitation(channels=channels, reduction=reduction)
+    
+    # Check reduced channels
+    expected_reduced = channels // reduction
+    assert se.reduce is not None
+    assert se.reduce.weight.shape[0] == expected_reduced
+
+
+def test_se_init_zero_reduction():
+    """Test SqueezeExcitation with zero reduction (no bottleneck)."""
+    channels = 16
+    se = SqueezeExcitation(channels=channels, reduction=0)
+    
+    # With reduction=0, reduce layer should be None
+    assert se.reduce is None
+    assert se.expand.weight.shape[1] == channels
+
+
+def test_se_init_with_residual():
+    """Test SqueezeExcitation initialization with residual connection."""
+    se = SqueezeExcitation(channels=8, residual=True)
+    assert se.residual is True
+
+
+def test_se_init_apply_to_input_false():
+    """Test SqueezeExcitation with apply_to_input=False."""
+    se = SqueezeExcitation(channels=8, apply_to_input=False)
+    assert se.apply_to_input is False
+
+
+def test_se_init_invalid_channels():
+    """Test SqueezeExcitation with invalid channel count."""
+    with pytest.raises(ValueError, match="`channels` must be a positive integer"):
+        SqueezeExcitation(channels=0)
+    
+    with pytest.raises(ValueError, match="`channels` must be a positive integer"):
+        SqueezeExcitation(channels=-1)
+
+
+def test_se_init_invalid_reduction():
+    """Test SqueezeExcitation with invalid reduction ratio."""
+    with pytest.raises(ValueError, match="`reduction` must be non-negative"):
+        SqueezeExcitation(channels=16, reduction=-1)
+
+
+def test_se_forward_3d_input():
+    """Test SqueezeExcitation forward pass with 3D input (B, L, C)."""
+    batch, length, channels = 2, 10, 8
+    se = SqueezeExcitation(channels=channels)
+    
+    x = mx.random.normal((batch, length, channels))
+    out = se(x)
+    
+    assert out.shape == (batch, length, channels)
+
+
+def test_se_forward_2d_input():
+    """Test SqueezeExcitation forward pass with 2D input (B, C)."""
+    batch, channels = 2, 8
+    se = SqueezeExcitation(channels=channels)
+    
+    x = mx.random.normal((batch, channels))
+    out = se(x)
+    
+    assert out.shape == (batch, channels)
+
+
+def test_se_forward_invalid_input_shape():
+    """Test SqueezeExcitation with invalid input dimensions."""
+    se = SqueezeExcitation(channels=8)
+    
+    # 1D input should raise error
+    with pytest.raises(ValueError, match="SE block expects"):
+        x = mx.random.normal((8,))
+        se(x)
+    
+    # 4D input should raise error
+    with pytest.raises(ValueError, match="SE block expects"):
+        x = mx.random.normal((2, 10, 8, 4))
+        se(x)
+
+
+def test_se_forward_with_residual():
+    """Test SqueezeExcitation forward pass with residual connection."""
+    batch, length, channels = 2, 10, 8
+    se = SqueezeExcitation(channels=channels, residual=True, apply_to_input=True)
+    
+    x = mx.random.normal((batch, length, channels))
+    out = se(x)
+    
+    assert out.shape == (batch, length, channels)
+    # Output should be different from input when residual is used
+    assert not mx.allclose(out, x, atol=1e-5).item()
+
+
+def test_se_forward_apply_to_input_false():
+    """Test SqueezeExcitation returns only weights when apply_to_input=False."""
+    batch, length, channels = 2, 10, 8
+    se = SqueezeExcitation(channels=channels, apply_to_input=False)
+    
+    x = mx.random.normal((batch, length, channels))
+    weights = se(x)
+    
+    # Should return weights with shape (B, 1, C)
+    assert weights.shape == (batch, 1, channels)
+    # Weights should be different from input
+    assert weights.shape != x.shape
+
+
+def test_se_forward_zero_reduction():
+    """Test SqueezeExcitation forward pass with zero reduction."""
+    batch, length, channels = 2, 10, 8
+    se = SqueezeExcitation(channels=channels, reduction=0)
+    
+    x = mx.random.normal((batch, length, channels))
+    out = se(x)
+    
+    assert out.shape == (batch, length, channels)
+
+
+def test_se_output_range():
+    """Test that SE output has reasonable values (scaled by sigmoid)."""
+    batch, length, channels = 2, 10, 8
+    se = SqueezeExcitation(channels=channels, apply_to_input=True)
+    
+    x = mx.random.normal((batch, length, channels))
+    out = se(x)
+    
+    # Output should have finite values
+    assert mx.all(mx.isfinite(out)).item()
+
+
+# ============================================================================
+# TemporalBlock with SE - Extended Tests
+# ============================================================================
+
+def test_temporal_block_se_with_gate():
+    """Test TemporalBlock with both SE layer and gated activation."""
+    batch, seq_len, in_ch = 2, 12, 4
+    out_ch = 8
+    
+    block = TemporalBlock(
+        in_channels=in_ch,
+        out_channels=out_ch,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.0,
+        causal=False,
+        norm=None,
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=True,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out, residual = block(x, embeddings=None, inference=False)
+    
+    assert out.shape == (batch, seq_len, out_ch)
+    assert block.se is not None
+
+
+def test_temporal_block_se_with_embeddings():
+    """Test TemporalBlock with SE layer and embeddings."""
+    batch, seq_len, in_ch = 2, 10, 4
+    out_ch = 8
+    embed_dim = 3
+    
+    block = TemporalBlock(
+        in_channels=in_ch,
+        out_channels=out_ch,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.0,
+        causal=False,
+        norm=None,
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=[(embed_dim,)],
+        embedding_mode="add",
+        use_gate=False,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    embeddings = mx.random.normal((batch, embed_dim))
+    out, residual = block(x, embeddings=[embeddings], inference=False)
+    
+    assert out.shape == (batch, seq_len, out_ch)
+
+
+def test_temporal_block_se_with_batch_norm():
+    """Test TemporalBlock with SE layer and batch normalization."""
+    batch, seq_len, in_ch = 2, 12, 4
+    out_ch = 8
+    
+    block = TemporalBlock(
+        in_channels=in_ch,
+        out_channels=out_ch,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.0,
+        causal=False,
+        norm="batch_norm",
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=False,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out, residual = block(x, embeddings=None, inference=False)
+    
+    assert out.shape == (batch, seq_len, out_ch)
+
+
+def test_temporal_block_se_with_weight_norm():
+    """Test TemporalBlock with SE layer and weight normalization."""
+    batch, seq_len, in_ch = 2, 12, 4
+    out_ch = 8
+    
+    block = TemporalBlock(
+        in_channels=in_ch,
+        out_channels=out_ch,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.0,
+        causal=False,
+        norm="weight_norm",
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=False,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out, residual = block(x, embeddings=None, inference=False)
+    
+    assert out.shape == (batch, seq_len, out_ch)
+
+
+def test_temporal_block_se_causal_inference():
+    """Test TemporalBlock with SE layer in causal inference mode."""
+    batch, seq_len, in_ch = 1, 5, 4
+    out_ch = 8
+    
+    block = TemporalBlock(
+        in_channels=in_ch,
+        out_channels=out_ch,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.0,
+        causal=True,
+        norm=None,
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=False,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out, residual = block(x, embeddings=None, inference=True)
+    
+    assert out.shape[-1] == out_ch
+
+
+def test_temporal_block_se_residual():
+    """Test TemporalBlock with SE layer using residual connection."""
+    batch, seq_len, in_ch = 2, 12, 4
+    out_ch = 8
+    
+    block = TemporalBlock(
+        in_channels=in_ch,
+        out_channels=out_ch,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.0,
+        causal=False,
+        norm=None,
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=False,
+        use_se=True,
+        se_reduction=4,
+        se_residual=True,
+    )
+    
+    assert block.se.residual is True
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out, residual = block(x, embeddings=None, inference=False)
+    
+    assert out.shape == (batch, seq_len, out_ch)
+
+
+def test_temporal_block_se_disabled():
+    """Test TemporalBlock with SE layer explicitly disabled."""
+    block = TemporalBlock(
+        in_channels=4,
+        out_channels=8,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.1,
+        causal=False,
+        norm=None,
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=False,
+        use_se=False,
+    )
+    
+    assert block.use_se is False
+    assert block.se is None
+
+
+def test_temporal_block_se_weights_initialized():
+    """Test that SE layer weights are properly initialized in TemporalBlock."""
+    block = TemporalBlock(
+        in_channels=4,
+        out_channels=8,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        dropout=0.0,
+        causal=False,
+        norm=None,
+        activation="relu",
+        kernel_init="he_normal",
+        embedding_dims=None,
+        embedding_mode="add",
+        use_gate=False,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    assert block.se is not None
+    if block.se.reduce is not None:
+        assert block.se.reduce.weight is not None
+        assert mx.all(mx.isfinite(block.se.reduce.weight)).item()
+    
+    assert block.se.expand.weight is not None
+    assert mx.all(mx.isfinite(block.se.expand.weight)).item()
+
+
+# ============================================================================
+# TCN with SE - Extended Tests
+# ============================================================================
+
+def test_tcn_se_basic():
+    """Test TCN with SE layers enabled."""
+    tcn = TCN(
+        num_inputs=4,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+    )
+    
+    assert tcn.use_se is True
+    for block in tcn.network:
+        assert block.use_se is True
+        assert block.se is not None
+
+
+def test_tcn_se_forward():
+    """Test TCN forward pass with SE layers."""
+    batch, seq_len, in_ch = 2, 12, 4
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x)
+    
+    assert out.shape == (batch, seq_len, 16)
+
+
+def test_tcn_se_with_skip_connections():
+    """Test TCN with SE layers and skip connections."""
+    batch, seq_len, in_ch = 2, 10, 4
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 12, 16],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+        se_reduction=4,
+        use_skip_connections=True,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x)
+    
+    assert out.shape == (batch, seq_len, 16)
+
+
+def test_tcn_se_with_gate():
+    """Test TCN with SE layers and gated activation."""
+    batch, seq_len, in_ch = 2, 10, 4
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+        se_reduction=4,
+        use_gate=True,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x)
+    
+    assert out.shape == (batch, seq_len, 16)
+
+
+def test_tcn_se_with_embeddings():
+    """Test TCN with SE layers and embeddings."""
+    batch, seq_len, in_ch = 2, 10, 4
+    embed_dim = 5
+    
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+        se_reduction=4,
+        embedding_shapes=[(embed_dim,)],
+        embedding_mode="add",
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    embeddings = mx.random.normal((batch, embed_dim))
+    out = tcn(x, embeddings=[embeddings])
+    
+    assert out.shape == (batch, seq_len, 16)
+
+
+def test_tcn_se_causal_inference():
+    """Test TCN with SE layers in causal inference mode."""
+    batch, seq_len, in_ch = 1, 5, 4
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=True,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x, inference=True)
+    
+    assert out.shape == (batch, seq_len, 16)
+
+
+def test_tcn_se_streaming():
+    """Test TCN with SE layers in streaming mode."""
+    batch, chunk_size, in_ch = 1, 3, 4
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=True,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    # Full sequence for reference
+    full_seq_len = 12
+    x_full = mx.random.normal((batch, full_seq_len, in_ch))
+    out_full = tcn(x_full, inference=False)
+    
+    # Streaming inference
+    tcn.reset_buffers()
+    chunks = [x_full[:, i:i+chunk_size, :] for i in range(0, full_seq_len, chunk_size)]
+    
+    out_chunks = []
+    for chunk in chunks:
+        out_chunk = tcn(chunk, inference=True)
+        out_chunks.append(out_chunk)
+    
+    out_streaming = mx.concatenate(out_chunks, axis=1)
+    
+    # Shapes should match
+    assert out_streaming.shape == out_full.shape
+
+
+def test_tcn_se_with_output_projection():
+    """Test TCN with SE layers and output projection."""
+    batch, seq_len, in_ch = 2, 10, 4
+    out_features = 10
+    
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+        se_reduction=4,
+        output_projection=out_features,
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x)
+    
+    assert out.shape == (batch, seq_len, out_features)
+
+
+def test_tcn_se_different_reductions():
+    """Test TCN with different SE reduction ratios."""
+    batch, seq_len, in_ch = 2, 10, 4
+    
+    for reduction in [2, 4, 8, 16]:
+        tcn = TCN(
+            num_inputs=in_ch,
+            num_channels=[16],
+            kernel_sizes=3,
+            causal=False,
+            use_se=True,
+            se_reduction=reduction,
+        )
+        
+        x = mx.random.normal((batch, seq_len, in_ch))
+        out = tcn(x)
+        
+        assert out.shape == (batch, seq_len, 16)
+        assert tcn.network[0].se.reduce is not None
+
+
+def test_tcn_se_residual_connections():
+    """Test TCN with SE layers using residual connections."""
+    batch, seq_len, in_ch = 2, 10, 4
+    
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+        se_reduction=4,
+        se_residual=True,
+    )
+    
+    for block in tcn.network:
+        assert block.se.residual is True
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x)
+    
+    assert out.shape == (batch, seq_len, 16)
+
+
+def test_tcn_se_with_all_norms():
+    """Test TCN with SE layers with different normalization types."""
+    batch, seq_len, in_ch = 2, 10, 4
+    
+    for norm in ["batch_norm", "layer_norm", "weight_norm", None]:
+        tcn = TCN(
+            num_inputs=in_ch,
+            num_channels=[8, 16],
+            kernel_sizes=3,
+            causal=False,
+            use_norm=norm,
+            use_se=True,
+            se_reduction=4,
+        )
+        
+        x = mx.random.normal((batch, seq_len, in_ch))
+        out = tcn(x)
+        
+        assert out.shape == (batch, seq_len, 16)
+
+
+def test_tcn_se_multiple_layers():
+    """Test TCN with SE layers in deep networks."""
+    batch, seq_len, in_ch = 2, 10, 4
+    
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 12, 16, 20, 24],
+        kernel_sizes=3,
+        causal=False,
+        use_se=True,
+        se_reduction=4,
+    )
+    
+    assert len(tcn.network) == 5
+    for block in tcn.network:
+        assert block.use_se is True
+        assert block.se is not None
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    out = tcn(x)
+    
+    assert out.shape == (batch, seq_len, 24)
+
+
+def test_tcn_se_all_features_combined():
+    """Test TCN with SE and all other features enabled."""
+    batch, seq_len, in_ch = 2, 10, 4
+    embed_dim = 3
+    
+    tcn = TCN(
+        num_inputs=in_ch,
+        num_channels=[8, 16],
+        kernel_sizes=3,
+        causal=True,
+        use_norm="batch_norm",
+        use_se=True,
+        se_reduction=4,
+        se_residual=True,
+        use_gate=True,
+        use_skip_connections=True,
+        embedding_shapes=[(embed_dim,)],
+        embedding_mode="add",
+        output_projection=10,
+        output_activation="relu",
+    )
+    
+    x = mx.random.normal((batch, seq_len, in_ch))
+    embeddings = mx.random.normal((batch, embed_dim))
+    out = tcn(x, embeddings=[embeddings], inference=True)
+    
+    assert out.shape == (batch, seq_len, 10)
+
+
+# ============================================================================
 # Main test runner
 # ============================================================================
 
@@ -1755,6 +2508,50 @@ if __name__ == "__main__":
         test_tcn_return_value_single,
         test_tcn_with_embeddings_optional_parameter,
         test_tcn_default_inference_false,
+        
+        # SqueezeExcitation tests
+        test_se_init_basic,
+        test_se_init_with_reduction,
+        test_se_init_zero_reduction,
+        test_se_init_with_residual,
+        test_se_init_apply_to_input_false,
+        test_se_init_invalid_channels,
+        test_se_init_invalid_reduction,
+        test_se_forward_3d_input,
+        test_se_forward_2d_input,
+        test_se_forward_invalid_input_shape,
+        test_se_forward_with_residual,
+        test_se_forward_apply_to_input_false,
+        test_se_forward_zero_reduction,
+        test_se_output_range,
+        
+        # TemporalBlock with SE tests
+        test_temporal_block_init_with_se,
+        test_temporal_block_forward_with_se,
+        test_temporal_block_se_with_gate,
+        test_temporal_block_se_with_embeddings,
+        test_temporal_block_se_with_batch_norm,
+        test_temporal_block_se_with_weight_norm,
+        test_temporal_block_se_causal_inference,
+        test_temporal_block_se_residual,
+        test_temporal_block_se_disabled,
+        test_temporal_block_se_weights_initialized,
+        
+        # TCN with SE tests
+        test_tcn_init_with_se_layers,
+        test_tcn_se_basic,
+        test_tcn_se_forward,
+        test_tcn_se_with_skip_connections,
+        test_tcn_se_with_gate,
+        test_tcn_se_with_embeddings,
+        test_tcn_se_causal_inference,
+        test_tcn_se_streaming,
+        test_tcn_se_with_output_projection,
+        test_tcn_se_different_reductions,
+        test_tcn_se_residual_connections,
+        test_tcn_se_with_all_norms,
+        test_tcn_se_multiple_layers,
+        test_tcn_se_all_features_combined,
     ]
     
     passed = 0

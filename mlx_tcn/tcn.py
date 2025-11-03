@@ -10,6 +10,7 @@ from .conv import TemporalConv1d, TemporalConvTransposed1d
 from .pad import TemporalPad1d
 from .init import calculate_gain
 from .parametrizations import weight_norm
+from .se import SqueezeExcitation
 
 
 activation_fn = dict(
@@ -154,7 +155,10 @@ class TemporalBlock(BaseTCN):
                 kernel_init: str,
                 embedding_dims: Optional[List[mx.array]],
                 embedding_mode: str = "add",
-                use_gate: bool=False):
+                use_gate: bool = False,
+                use_se: bool = False,
+                se_reduction: int = 8,
+                se_residual: bool = False):
         
 
         super(TemporalBlock, self).__init__()
@@ -162,6 +166,9 @@ class TemporalBlock(BaseTCN):
         self.activation = activation
         self.kernel_init = kernel_init
         self.use_gate = use_gate
+        self.use_se = use_se
+        self.se_reduction = se_reduction
+        self.se_residual = se_residual
         self.causal = causal
         object.__setattr__(self, "_embedding_dims", None)
 
@@ -237,6 +244,16 @@ class TemporalBlock(BaseTCN):
 
         self.dropout1 = nn.Dropout(p=dropout)
         self.dropout2 = nn.Dropout(p=dropout)
+        self.se: Optional[SqueezeExcitation]
+        if self.use_se:
+            self.se = SqueezeExcitation(
+                channels=out_channels,
+                reduction=self.se_reduction,
+                residual=self.se_residual,
+                apply_to_input=True,
+            )
+        else:
+            self.se = None
         self.downSample = nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=1) if in_channels != out_channels else None
         
         if embedding_dims is not None:
@@ -286,6 +303,10 @@ class TemporalBlock(BaseTCN):
         embedding_proj_2 = getattr(self, "embedding_projection2", None)
         if embedding_proj_2 is not None:
             embedding_proj_2.weight = init_fn(embedding_proj_2.weight)
+        if self.se is not None:
+            if self.se.reduce is not None:
+                self.se.reduce.weight = init_fn(self.se.reduce.weight)
+            self.se.expand.weight = init_fn(self.se.expand.weight)
 
     def apply_normal(self, norm_fn: Callable, x: mx.array) -> mx.array:
         return norm_fn(x) if norm_fn is not None else x
@@ -369,6 +390,8 @@ class TemporalBlock(BaseTCN):
         out = self.apply_normal(self.norm2, out)
         out = self.activation2(out)
         out = self.dropout2(out)
+        if self.se is not None:
+            out = self.se(out)
 
         res = x if self.downSample is None else self.downSample(x)
         return self.activation_final(res + out), out
@@ -395,6 +418,9 @@ class TCN(BaseTCN):
                 embedding_shapes: Optional[List[Tuple]] = None,
                 embedding_mode: str = "add",
                 use_gate: bool = False,
+                use_se: bool = False,
+                se_reduction: int = 8,
+                se_residual: bool = False,
                 look_ahead: int = 0,
                 output_projection: Optional[int] = None,
                 output_activation: Optional[str] = None):
@@ -424,6 +450,9 @@ class TCN(BaseTCN):
         object.__setattr__(self, "_embedding_shapes", None)
         self.embedding_mode = embedding_mode
         self.use_gate = use_gate
+        self.use_se = use_se
+        self.se_reduction = se_reduction
+        self.se_residual = se_residual
         self.causal = causal
         self.output_projection = output_projection
         self.output_activation = output_activation
@@ -493,7 +522,10 @@ class TCN(BaseTCN):
                                               kernel_init=self.kernel_init,
                                               embedding_dims=self.embedding_shapes,
                                               embedding_mode=self.embedding_mode,
-                                              use_gate=self.use_gate))
+                                              use_gate=self.use_gate,
+                                              use_se=self.use_se,
+                                              se_reduction=self.se_reduction,
+                                              se_residual=self.se_residual))
         
         if self.output_projection is not None:
             self.projection_out = nn.Conv1d(in_channels=num_channels[-1], 

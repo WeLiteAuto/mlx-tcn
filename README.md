@@ -12,16 +12,17 @@ A re-implementation of the Temporal Convolutional Network (TCN) architecture in 
 
 - Stacks of dilated causal convolutions for long receptive fields without pooling.
 - Residual `TemporalBlock`s supporting layer/batch normalization, dropout, gated activations, and optional embeddings (`concat` or `add`).
+- **Squeeze-and-Excitation (SE) blocks** for adaptive channel recalibration with configurable reduction ratios and residual connections.
 - Optional global skip connections with output projection layers.
 - Streaming-aware inference via `TemporalPad1d` and `BufferIO`, with extended buffer management utilities.
 - Drop-in TCN module mirroring a PyTorch-style API, but using MLX arrays and modules.
-- Inspired by [PyTorch-TCN](https://github.com/paul-krug/pytorch-tcn) while intentionally diverging in several behaviors (see “Differences from PyTorch-TCN” below).
+- Inspired by [PyTorch-TCN](https://github.com/paul-krug/pytorch-tcn) while intentionally diverging in several behaviors (see "Differences from PyTorch-TCN" below).
 
 ## Project Status
 
 - **Status:** Production ready (October 30, 2025)
-- **Test Coverage:** 259 unit tests across all components (100% pass rate)
-- **Key Capabilities:** Streaming inference (batch size 1), embedding fusion (`add`/`concat`), global skip connections, configurable dilations and activations
+- **Test Coverage:** 304 unit tests across all components (100% pass rate)
+- **Key Capabilities:** Streaming inference (batch size 1), embedding fusion (`add`/`concat`), SE blocks for channel attention, global skip connections, configurable dilations and activations
 - **Limitations:** Streaming currently limited to batch size 1; padding modes restricted to `zeros` and `replicate`; transposed conv requires `kernel_size = 2 * stride`
 
 ### Component Overview
@@ -30,18 +31,19 @@ A re-implementation of the Temporal Convolutional Network (TCN) architecture in 
 - `pad.py / TemporalPad1d` – Causal & non-causal padding with buffer management
 - `conv.py / TemporalConv1d` – Auto-padding temporal convs with streaming support
 - `conv.py / TemporalConvTransposed1d` – Upsampling counterpart for decoder stacks
-- `tcn.py / TemporalBlock` – Residual blocks with normalization, gating, embeddings
+- `se.py / SqueezeExcitation` – Channel attention via global pooling and gating
+- `tcn.py / TemporalBlock` – Residual blocks with normalization, gating, embeddings, SE
 - `tcn.py / TCN` – Stackable architecture with dilations, skip connections, projections
 - `modules.py / ModuleList` – MLX-compatible container mirroring PyTorch API
 
 ### Test Coverage
 
-- **Total tests:** 259 (100% pass rate)
+- **Total tests:** 304 (100% pass rate)
 - **Module breakdown:**
   - `test_buffer.py`: 9 tests
   - `test_pad.py`: 25 tests
   - `test_conv.py`: 37 tests
-  - `test_tcn.py`: 72 tests
+  - `test_tcn.py`: 117 tests (including 45 SE layer tests)
   - `test_config.py`: 31 tests
   - `test_data.py`: 31 tests
   - `test_loop.py`: 30 tests
@@ -103,6 +105,58 @@ embeddings = [
 logits = model(x, embeddings=embeddings)
 ```
 
+### Using Squeeze-and-Excitation blocks
+
+SE blocks perform adaptive channel recalibration through three steps:
+1. **Squeeze** – Global average pooling compresses spatial information
+2. **Excitation** – Two-layer MLP learns channel-wise importance 
+3. **Scale** – Sigmoid-gated weights rescale feature maps
+
+Enable them with `use_se=True`:
+
+```python
+model = TCN(
+    num_inputs=32,
+    num_channels=[64, 128, 256],
+    kernel_sizes=3,
+    causal=True,
+    use_se=True,              # Enable SE blocks
+    se_reduction=8,           # Reduction ratio for bottleneck (default: 8)
+    se_residual=False,        # Add residual connection inside SE (default: False)
+)
+
+x = mx.random.normal((4, 100, 32))
+out = model(x, inference=True)
+```
+
+The SE block squeezes spatial information via global pooling, learns channel importance through a two-layer MLP, and rescales the features. You can combine SE with other features like gated activations and embeddings:
+
+```python
+model = TCN(
+    num_inputs=32,
+    num_channels=[64, 128],
+    kernel_sizes=3,
+    use_se=True,
+    se_reduction=4,
+    use_gate=True,             # Combine SE with gated activations
+    embedding_shapes=[(16,)],  # And embeddings
+    embedding_mode="add",
+)
+```
+
+**SE Parameter Guide:**
+
+| `se_reduction` | Use Case | Parameters | Computation |
+|----------------|----------|------------|-------------|
+| 2 | High capacity | Most | Highest |
+| 4 | Balanced | More | Higher |
+| **8** (default) | **Recommended** | **Medium** | **Medium** |
+| 16 | Lightweight | Least | Lowest |
+
+**Parameter formula:** For a layer with `C` channels, SE adds approximately `2 × C × (C / reduction)` parameters.
+
+**Example:** With `channels=128` and `reduction=8`, SE adds ~4K parameters (128×16 + 16×128).
+
 ### Streaming inference
 
 Enable `causal=True`, reset internal buffers, and optionally manage padding state yourself via `BufferIO` when chunking the input sequence.
@@ -123,6 +177,13 @@ stream_out = model(chunk, embeddings=None, inference=True, in_buffer=buffers)
 - Adjust dilation growth through `dilations` or `dilation_reset` to control receptive field size.
 - The `kernel_initilaizer` argument accepts keys from `mlx_tcn/utils.py`—e.g. `"xavier_normal"`, `"he_uniform"`.
 - When enabling skip connections, the model will project per-block outputs to the last channel width and sum them before the final activation.
+
+**Using SE blocks effectively:**
+- Start with `se_reduction=8` (default) for most use cases. Adjust based on your channel dimensions and parameter budget.
+- Smaller reductions (e.g., 4) add more capacity but increase computation; larger reductions (e.g., 16) are more lightweight.
+- SE blocks work well with classification tasks and when model capacity allows. Use cautiously in extremely lightweight models.
+- Combine SE with other features: SE + gated activations (GLU) and SE + batch/layer normalization are effective combinations.
+- SE adds <5% parameters typically but can significantly improve feature quality through channel recalibration.
 
 ## Tests
 
@@ -158,8 +219,10 @@ mlx-tcn/
 │   ├── buffer.py          # BufferIO for streaming chunk management
 │   ├── conv.py            # TemporalConv1d / TemporalConvTransposed1d
 │   ├── init.py            # MLX-friendly calculate_gain helper
-│   ├── normalization.py   # Experimental WeightNorm layer
+│   ├── parametrizations.py # Weight normalization utilities
 │   ├── pad.py             # TemporalPad1d with causal buffer support
+│   ├── pool.py            # Adaptive pooling (AdaptiveAvgPool1d, AdaptiveMaxPool1d)
+│   ├── se.py              # SqueezeExcitation channel attention
 │   └── tcn.py             # TemporalBlock and TCN definitions
 ├── train/                 # Training pipeline components
 │   ├── config.py          # TrainingConfig dataclass
@@ -174,7 +237,8 @@ mlx-tcn/
 │       ├── test_buffer.py
 │       ├── test_conv.py
 │       ├── test_pad.py
-│       ├── test_tcn.py
+│       ├── test_parametrizations.py
+│       ├── test_tcn.py      # Includes 45 SE layer tests
 │       ├── test_config.py
 │       ├── test_data.py
 │       ├── test_loop.py
@@ -188,9 +252,11 @@ mlx-tcn/
 
 1. **Original TCN Paper**: Bai, S., Kolter, J. Z., & Koltun, V. (2018). *An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling*. ICLR 2018.
 
-2. **PyTorch-TCN**: https://github.com/paul-krug/pytorch-tcn
+2. **Squeeze-and-Excitation Networks**: Hu, J., Shen, L., & Sun, G. (2018). *Squeeze-and-Excitation Networks*. CVPR 2018.
 
-3. **MLX Framework**: https://github.com/ml-explore/mlx
+3. **PyTorch-TCN**: https://github.com/paul-krug/pytorch-tcn
+
+4. **MLX Framework**: https://github.com/ml-explore/mlx
 
 ## License & Acknowledgements
 
